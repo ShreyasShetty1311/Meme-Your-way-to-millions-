@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user in the system (Admin, Team, or Audience)",
+      "type": "object",
+      "properties": {
+        "role": { "type": "string", "enum": ["admin", "team", "audience"] },
+        "name": { "type": "string" },
+        "budget": { "type": "number" },
+        "score": { "type": "number" }
+      },
+      "required": ["role", "name"]
+    },
+    "Meme": {
+      "title": "Meme",
+      "description": "A meme asset available in the market",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "initialPrice": { "type": "number" },
+        "currentPrice": { "type": "number" },
+        "totalShares": { "type": "number" },
+        "availableShares": { "type": "number" },
+        "volatility": { "type": "string" },
+        "burnRate": { "type": "string" }
+      },
+      "required": ["name", "imageUrl", "initialPrice", "currentPrice", "totalShares", "availableShares"]
+    },
+    "PortfolioItem": {
+      "title": "Portfolio Item",
+      "description": "A team's ownership of a specific meme",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "memeId": { "type": "string" },
+        "shares": { "type": "number" },
+        "averagePrice": { "type": "number" }
+      },
+      "required": ["userId", "memeId", "shares", "averagePrice"]
+    },
+    "GameState": {
+      "title": "Game State",
+      "description": "Global state of the game",
+      "type": "object",
+      "properties": {
+        "currentRound": { "type": "number" },
+        "status": { "type": "string", "enum": ["setup", "active", "completed"] },
+        "activeScenarioId": { "type": "string" }
+      },
+      "required": ["currentRound", "status"]
+    },
+    "Scenario": {
+      "title": "Scenario",
+      "description": "A scenario for Round 2",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "completed"] }
+      },
+      "required": ["title", "description", "status"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "A team's meme submission for a scenario",
+      "type": "object",
+      "properties": {
+        "scenarioId": { "type": "string" },
+        "teamId": { "type": "string" },
+        "memeId": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["scenarioId", "teamId", "memeId", "timestamp"]
+    },
+    "Vote": {
+      "title": "Vote",
+      "description": "An audience member's vote for a submission",
+      "type": "object",
+      "properties": {
+        "scenarioId": { "type": "string" },
+        "audienceId": { "type": "string" },
+        "submissionId": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["scenarioId", "audienceId", "submissionId", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Users collection"
+    },
+    "/memes/{memeId}": {
+      "schema": { "$ref": "#/entities/Meme" },
+      "description": "Memes collection"
+    },
+    "/portfolios/{portfolioId}": {
+      "schema": { "$ref": "#/entities/PortfolioItem" },
+      "description": "Team portfolios"
+    },
+    "/gameState/{stateId}": {
+      "schema": { "$ref": "#/entities/GameState" },
+      "description": "Global game state (usually just 'current')"
+    },
+    "/scenarios/{scenarioId}": {
+      "schema": { "$ref": "#/entities/Scenario" },
+      "description": "Scenarios collection"
+    },
+    "/submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/Submission" },
+      "description": "Submissions collection"
+    },
+    "/votes/{voteId}": {
+      "schema": { "$ref": "#/entities/Vote" },
+      "description": "Votes collection"
+    }
+  }
+}

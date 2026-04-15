@@ -1,0 +1,102 @@
+import React, { useEffect, useState } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore';
+import { db } from './firebase';
+import { useStore, setupListeners, AppUser } from './store/useStore';
+import { Layout } from './components/Layout';
+
+// Pages
+import Landing from './pages/Landing';
+import Market from './pages/Market';
+import Scenario from './pages/Scenario';
+import Voting from './pages/Voting';
+import AdminUsers from './pages/admin/Users';
+import AdminRound1 from './pages/admin/Round1';
+import AdminRound2 from './pages/admin/Round2';
+import AdminTransfer from './pages/admin/Transfer';
+import AdminTeams from './pages/admin/Teams';
+
+function App() {
+  const { setAppUser, setAuthReady, isAuthReady, appUser } = useStore();
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        // 1. Bootstrap default users if they don't exist
+        const q = query(collection(db, 'users'), where('username', '==', 'admin'));
+        const snap = await getDocs(q);
+        if (snap.empty) {
+          await setDoc(doc(collection(db, 'users')), { username: 'admin', password: 'admin@123', role: 'admin', name: 'Admin' });
+          await setDoc(doc(collection(db, 'users')), { username: 'voter', password: 'voter@bmsce', role: 'audience', name: 'Voter' });
+          await setDoc(doc(collection(db, 'users')), { username: 'user', password: 'user@1', role: 'team', name: 'Team 1', budget: 42069 });
+        }
+
+        // 2. Check local storage for existing session
+        const userId = localStorage.getItem('userId');
+        if (userId) {
+          const userDoc = await getDoc(doc(db, 'users', userId));
+          if (userDoc.exists()) {
+            setAppUser({ id: userDoc.id, ...userDoc.data() } as AppUser);
+          } else {
+            localStorage.removeItem('userId');
+          }
+        }
+      } catch (error) {
+        console.error("Error initializing auth:", error);
+      } finally {
+        setAuthReady(true);
+        setLoading(false);
+      }
+    };
+
+    initAuth();
+  }, [setAppUser, setAuthReady]);
+
+  useEffect(() => {
+    if (isAuthReady && appUser) {
+      const cleanup = setupListeners(appUser.id, appUser.role);
+      return () => cleanup();
+    }
+  }, [isAuthReady, appUser]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={!appUser ? <Landing /> : <Navigate to="/" replace />} />
+        
+        <Route element={appUser ? <Layout /> : <Navigate to="/login" replace />}>
+          <Route path="/" element={
+            appUser?.role === 'admin' ? <Navigate to="/admin/users" replace /> :
+            appUser?.role === 'team' ? <Navigate to="/market" replace /> :
+            <Navigate to="/voting" replace />
+          } />
+          
+          {/* Admin Routes */}
+          <Route path="/admin/users" element={appUser?.role === 'admin' ? <AdminUsers /> : <Navigate to="/" replace />} />
+          <Route path="/admin/round1" element={appUser?.role === 'admin' ? <AdminRound1 /> : <Navigate to="/" replace />} />
+          <Route path="/admin/round2" element={appUser?.role === 'admin' ? <AdminRound2 /> : <Navigate to="/" replace />} />
+          <Route path="/admin/transfer" element={appUser?.role === 'admin' ? <AdminTransfer /> : <Navigate to="/" replace />} />
+          <Route path="/admin/teams" element={appUser?.role === 'admin' ? <AdminTeams /> : <Navigate to="/" replace />} />
+          
+          {/* Team Routes */}
+          <Route path="/market" element={appUser?.role === 'team' ? <Market /> : <Navigate to="/" replace />} />
+          <Route path="/scenario" element={appUser?.role === 'team' ? <Scenario /> : <Navigate to="/" replace />} />
+          
+          {/* Audience Routes */}
+          <Route path="/voting" element={appUser?.role === 'audience' ? <Voting /> : <Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+export default App;
