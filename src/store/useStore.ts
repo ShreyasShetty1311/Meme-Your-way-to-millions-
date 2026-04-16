@@ -39,6 +39,7 @@ export interface GameState {
   currentRound: number;
   status: 'setup' | 'active' | 'completed';
   activeScenarioId?: string;
+  tradeRoundActive?: boolean;
 }
 
 export interface Scenario {
@@ -56,6 +57,25 @@ export interface Submission {
   timestamp: number;
 }
 
+export interface Vote {
+  id: string;
+  scenarioId: string;
+  audienceId: string;
+  submissionId: string;
+  timestamp: number;
+}
+
+export interface TradeListing {
+  id: string;
+  sellerId: string;
+  memeId: string;
+  shares: number;
+  pricePerShare: number;
+  createdAt: number;
+  status: 'active' | 'sold';
+  buyerId?: string;
+}
+
 interface AppState {
   appUser: AppUser | null;
   memes: Meme[];
@@ -63,6 +83,8 @@ interface AppState {
   gameState: GameState | null;
   scenarios: Scenario[];
   submissions: Submission[];
+  votes: Vote[];
+  tradeListings: TradeListing[];
   isAuthReady: boolean;
   setAppUser: (appUser: AppUser | null) => void;
   setAuthReady: (ready: boolean) => void;
@@ -76,55 +98,99 @@ export const useStore = create<AppState>((set) => ({
   gameState: null,
   scenarios: [],
   submissions: [],
+  votes: [],
+  tradeListings: [],
   isAuthReady: false,
   setAppUser: (appUser) => set({ appUser }),
   setAuthReady: (ready) => set({ isAuthReady: ready }),
   logout: () => {
     localStorage.removeItem('userId');
     set({ appUser: null, portfolio: [] });
-  }
+  },
 }));
 
 export const setupListeners = (userId: string, role: Role) => {
   const unsubscribes: (() => void)[] = [];
 
-  // Listen to Game State
-  const unsubGameState = onSnapshot(doc(db, 'gameState', 'current'), (doc) => {
-    if (doc.exists()) {
-      useStore.setState({ gameState: doc.data() as GameState });
-    }
-  }, (error) => handleFirestoreError(error, OperationType.GET, 'gameState/current'));
-  unsubscribes.push(unsubGameState);
+  // ── Always for every role ──
 
-  // Listen to Memes
-  const unsubMemes = onSnapshot(collection(db, 'memes'), (snapshot) => {
-    const memes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Meme));
-    useStore.setState({ memes });
-  }, (error) => handleFirestoreError(error, OperationType.LIST, 'memes'));
-  unsubscribes.push(unsubMemes);
+  // Live user doc — keeps budget and all user fields up-to-date
+  unsubscribes.push(onSnapshot(
+    doc(db, 'users', userId),
+    (snap) => { if (snap.exists()) useStore.setState({ appUser: { id: snap.id, ...snap.data() } as AppUser }); },
+    (err) => console.error('User listener:', err)
+  ));
 
-  // Listen to Scenarios
-  const unsubScenarios = onSnapshot(collection(db, 'scenarios'), (snapshot) => {
-    const scenarios = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Scenario));
-    useStore.setState({ scenarios });
-  }, (error) => handleFirestoreError(error, OperationType.LIST, 'scenarios'));
-  unsubscribes.push(unsubScenarios);
+  // Game state
+  unsubscribes.push(onSnapshot(
+    doc(db, 'gameState', 'current'),
+    (snap) => { if (snap.exists()) useStore.setState({ gameState: snap.data() as GameState }); },
+    (err) => handleFirestoreError(err, OperationType.GET, 'gameState/current')
+  ));
 
-  // Listen to Submissions
-  const unsubSubmissions = onSnapshot(collection(db, 'submissions'), (snapshot) => {
-    const submissions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Submission));
-    useStore.setState({ submissions });
-  }, (error) => handleFirestoreError(error, OperationType.LIST, 'submissions'));
-  unsubscribes.push(unsubSubmissions);
+  // Memes (all roles need this)
+  unsubscribes.push(onSnapshot(
+    collection(db, 'memes'),
+    (snap) => useStore.setState({ memes: snap.docs.map(d => ({ id: d.id, ...d.data() } as Meme)) }),
+    (err) => handleFirestoreError(err, OperationType.LIST, 'memes')
+  ));
 
-  // Listen to Portfolio (if Team)
-  if (role === 'team') {
-    const q = query(collection(db, 'portfolios'), where('userId', '==', userId));
-    const unsubPortfolio = onSnapshot(q, (snapshot) => {
-      const portfolio = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PortfolioItem));
-      useStore.setState({ portfolio });
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'portfolios'));
-    unsubscribes.push(unsubPortfolio);
+  // Scenarios (all roles need this)
+  unsubscribes.push(onSnapshot(
+    collection(db, 'scenarios'),
+    (snap) => useStore.setState({ scenarios: snap.docs.map(d => ({ id: d.id, ...d.data() } as Scenario)) }),
+    (err) => handleFirestoreError(err, OperationType.LIST, 'scenarios')
+  ));
+
+  // ── Submissions: scoped by role ──
+  // Admin + audience: ALL submissions (admin dashboard; audience sees all reactions to vote on)
+  // Team: only THEIR own submissions (just 1 doc per scenario = max 15 docs vs 300 global)
+  // Saves: ~285 docs × 20 teams = 5,700 reads on startup
+  if (role === 'admin' || role === 'audience') {
+    unsubscribes.push(onSnapshot(
+      collection(db, 'submissions'),
+      (snap) => useStore.setState({ submissions: snap.docs.map(d => ({ id: d.id, ...d.data() } as Submission)) }),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'submissions')
+    ));
+  } else if (role === 'team') {
+    // Team only needs to know if THEY submitted each scenario
+    unsubscribes.push(onSnapshot(
+      query(collection(db, 'submissions'), where('teamId', '==', userId)),
+      (snap) => useStore.setState({ submissions: snap.docs.map(d => ({ id: d.id, ...d.data() } as Submission)) }),
+      (err) => console.error('Submissions listener:', err)
+    ));
+  }
+
+  // ── Votes: scoped by role ──
+  // Admin: ALL votes (needs full counts for Teams scoring panel)
+  // Audience: ALL votes (needs counts to display on voting cards + know if they voted)
+  // Team: NONE — teams never display or act on vote data
+  // Saves: ~300 docs × 20 teams = 6,000 reads on startup
+  if (role === 'admin' || role === 'audience') {
+    unsubscribes.push(onSnapshot(
+      collection(db, 'votes'),
+      (snap) => useStore.setState({ votes: snap.docs.map(d => ({ id: d.id, ...d.data() } as Vote)) }),
+      (err) => console.error('Votes listener:', err)
+    ));
+  }
+
+  // ── Trade Listings: admin + team only ──
+  // Audience never trades — skip entirely for voters
+  if (role === 'admin' || role === 'team') {
+    unsubscribes.push(onSnapshot(
+      collection(db, 'tradeListings'),
+      (snap) => useStore.setState({ tradeListings: snap.docs.map(d => ({ id: d.id, ...d.data() } as TradeListing)) }),
+      (err) => console.error('TradeListings listener:', err)
+    ));
+  }
+
+  // ── Portfolio: team and admin only ──
+  if (role === 'team' || role === 'admin') {
+    unsubscribes.push(onSnapshot(
+      query(collection(db, 'portfolios'), where('userId', '==', userId)),
+      (snap) => useStore.setState({ portfolio: snap.docs.map(d => ({ id: d.id, ...d.data() } as PortfolioItem)) }),
+      (err) => handleFirestoreError(err, OperationType.LIST, 'portfolios')
+    ));
   }
 
   return () => unsubscribes.forEach(unsub => unsub());

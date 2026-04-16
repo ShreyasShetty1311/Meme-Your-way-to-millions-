@@ -1,7 +1,7 @@
 import React from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useStore } from '../store/useStore';
-import { Users, LogOut, PlayCircle, Image as ImageIcon, Repeat, Shield } from 'lucide-react';
+import { Users, LogOut, PlayCircle, Image as ImageIcon, Repeat, Shield, TrendingUp, BarChart2 } from 'lucide-react';
 import clsx from 'clsx';
 
 export const Layout = () => {
@@ -16,15 +16,18 @@ export const Layout = () => {
 
   const navItems = [
     ...(isAdmin ? [
-      { path: '/admin/users', label: 'Users', icon: Users },
-      { path: '/admin/round1', label: 'Round 1', icon: ImageIcon },
-      { path: '/admin/round2', label: 'Round 2', icon: PlayCircle },
-      { path: '/admin/transfer', label: 'Transfer', icon: Repeat },
-      { path: '/admin/teams', label: 'Teams', icon: Shield },
+      { path: '/admin/users',    label: 'Users',    icon: Users       },
+      { path: '/admin/round1',   label: 'Round 1',  icon: ImageIcon   },
+      { path: '/admin/trade',    label: 'Trade',    icon: BarChart2   },
+      { path: '/admin/round2',   label: 'Round 2',  icon: PlayCircle  },
+      { path: '/admin/transfer', label: 'Transfer', icon: Repeat      },
+      { path: '/admin/teams',    label: 'Teams',    icon: Shield      },
     ] : []),
     ...(isTeam ? [
       { path: '/market', label: 'Market', icon: ImageIcon },
       { path: '/scenario', label: 'Scenario', icon: PlayCircle },
+      { path: '/trade', label: 'Trade', icon: BarChart2 },
+      { path: '/progress', label: 'Progress', icon: TrendingUp },
     ] : []),
     ...(isAudience ? [
       { path: '/voting', label: 'Voting', icon: PlayCircle },

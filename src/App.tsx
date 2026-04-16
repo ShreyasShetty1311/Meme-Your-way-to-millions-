@@ -10,11 +10,14 @@ import Landing from './pages/Landing';
 import Market from './pages/Market';
 import Scenario from './pages/Scenario';
 import Voting from './pages/Voting';
+import Progress from './pages/Progress';
+import Trade from './pages/Trade';
 import AdminUsers from './pages/admin/Users';
 import AdminRound1 from './pages/admin/Round1';
 import AdminRound2 from './pages/admin/Round2';
 import AdminTransfer from './pages/admin/Transfer';
 import AdminTeams from './pages/admin/Teams';
+import AdminTrade from './pages/admin/Trade';
 
 function App() {
   const { setAppUser, setAuthReady, isAuthReady, appUser } = useStore();
@@ -53,12 +56,17 @@ function App() {
     initAuth();
   }, [setAppUser, setAuthReady]);
 
+  // Extract STABLE PRIMITIVES — avoids re-subscribing every time a field
+  // like budget changes (which would briefly wipe memes/scenarios/gameState)
+  const appUserId = appUser?.id ?? null;
+  const appUserRole = appUser?.role ?? null;
+
   useEffect(() => {
-    if (isAuthReady && appUser) {
-      const cleanup = setupListeners(appUser.id, appUser.role);
+    if (isAuthReady && appUserId && appUserRole) {
+      const cleanup = setupListeners(appUserId, appUserRole);
       return () => cleanup();
     }
-  }, [isAuthReady, appUser]);
+  }, [isAuthReady, appUserId, appUserRole]);
 
   if (loading) {
     return (
@@ -86,10 +94,13 @@ function App() {
           <Route path="/admin/round2" element={appUser?.role === 'admin' ? <AdminRound2 /> : <Navigate to="/" replace />} />
           <Route path="/admin/transfer" element={appUser?.role === 'admin' ? <AdminTransfer /> : <Navigate to="/" replace />} />
           <Route path="/admin/teams" element={appUser?.role === 'admin' ? <AdminTeams /> : <Navigate to="/" replace />} />
+          <Route path="/admin/trade" element={appUser?.role === 'admin' ? <AdminTrade /> : <Navigate to="/" replace />} />
           
           {/* Team Routes */}
           <Route path="/market" element={appUser?.role === 'team' ? <Market /> : <Navigate to="/" replace />} />
           <Route path="/scenario" element={appUser?.role === 'team' ? <Scenario /> : <Navigate to="/" replace />} />
+          <Route path="/trade" element={appUser?.role === 'team' ? <Trade /> : <Navigate to="/" replace />} />
+          <Route path="/progress" element={appUser?.role === 'team' ? <Progress /> : <Navigate to="/" replace />} />
           
           {/* Audience Routes */}
           <Route path="/voting" element={appUser?.role === 'audience' ? <Voting /> : <Navigate to="/" replace />} />

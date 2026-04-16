@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import clsx from 'clsx';
 import { useStore } from '../store/useStore';
 import { TrendingUp, TrendingDown, DollarSign, Activity } from 'lucide-react';
 import { doc, runTransaction } from 'firebase/firestore';
