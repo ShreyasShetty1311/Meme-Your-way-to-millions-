@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useStore, AppUser } from '../store/useStore';
 import { LogIn } from 'lucide-react';
@@ -15,18 +15,18 @@ export default function Landing() {
     e.preventDefault();
     setError('');
     try {
-      // Only filter by username in Firestore to avoid needing a composite index.
-      // Password and role are checked client-side — safe for this demo auth model.
-      const q = query(
-        collection(db, 'users'),
-        where('username', '==', username)
-      );
-      const snap = await getDocs(q);
+      // Fetch ALL users and filter client-side.
+      // This avoids ALL Firestore composite index requirements entirely —
+      // works for any number of voters / teams with zero index setup.
+      const snap = await getDocs(collection(db, 'users'));
 
-      // Find matching doc by password AND role in JS
       const matchingDoc = snap.docs.find(d => {
         const data = d.data();
-        return data.password === password && data.role === loginType;
+        return (
+          data.username === username &&
+          data.password === password &&
+          data.role === loginType
+        );
       });
 
       if (matchingDoc) {
@@ -36,7 +36,8 @@ export default function Landing() {
         setError('Invalid credentials');
       }
     } catch (err) {
-      setError('Login failed');
+      console.error('Login error:', err);
+      setError('Login failed. Check the console for details.');
     }
   };
 
