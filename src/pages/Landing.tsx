@@ -15,18 +15,23 @@ export default function Landing() {
     e.preventDefault();
     setError('');
     try {
+      // Only filter by username in Firestore to avoid needing a composite index.
+      // Password and role are checked client-side — safe for this demo auth model.
       const q = query(
-        collection(db, 'users'), 
-        where('username', '==', username),
-        where('password', '==', password),
-        where('role', '==', loginType)
+        collection(db, 'users'),
+        where('username', '==', username)
       );
       const snap = await getDocs(q);
-      
-      if (!snap.empty) {
-        const userDoc = snap.docs[0];
-        localStorage.setItem('userId', userDoc.id);
-        setAppUser({ id: userDoc.id, ...userDoc.data() } as AppUser);
+
+      // Find matching doc by password AND role in JS
+      const matchingDoc = snap.docs.find(d => {
+        const data = d.data();
+        return data.password === password && data.role === loginType;
+      });
+
+      if (matchingDoc) {
+        localStorage.setItem('userId', matchingDoc.id);
+        setAppUser({ id: matchingDoc.id, ...matchingDoc.data() } as AppUser);
       } else {
         setError('Invalid credentials');
       }

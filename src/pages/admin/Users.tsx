@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import {
+  collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc,
+  getDocs, writeBatch, setDoc, getDoc,
+} from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { AppUser } from '../../store/useStore';
-import { UserPlus, Trash2, Users, Eye, EyeOff, Info, Check, X, Pencil } from 'lucide-react';
+import { UserPlus, Trash2, Users, Eye, EyeOff, Info, Check, X, Pencil, RotateCcw, AlertTriangle } from 'lucide-react';
 import clsx from 'clsx';
 
 const ROLE_COLORS: Record<string, string> = {
@@ -17,6 +20,8 @@ const DEFAULT_CREDS = [
   { role: 'Team', username: 'user', password: 'user@1' },
 ];
 
+const STARTING_BUDGET = 42069;
+
 interface EditState {
   username: string;
   password: string;
@@ -30,18 +35,22 @@ export default function AdminUsers() {
   const [showPass, setShowPass] = useState<Record<string, boolean>>({});
   const [isAdding, setIsAdding] = useState(false);
   const [loading, setLoading] = useState(false);
-  // Which row is being edited: userId -> edit state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editState, setEditState] = useState<EditState>({ username: '', password: '', budget: 0, role: 'team', name: '' });
   const [savingId, setSavingId] = useState<string | null>(null);
+
+  // Reset game state
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetStatus, setResetStatus] = useState('');
 
   const [newUser, setNewUser] = useState({
     username: '',
     password: '',
     email: '',
-    role: 'team',        // ← default is now team
+    role: 'team',
     name: '',
-    budget: 42069,
+    budget: STARTING_BUDGET,
   });
 
   useEffect(() => {
@@ -51,6 +60,106 @@ export default function AdminUsers() {
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
     return () => unsub();
   }, []);
+
+  /* ── Reset Game ── */
+  const handleResetGame = async () => {
+    setResetting(true);
+    setResetStatus('Clearing portfolios...');
+    try {
+      // 1. Delete all portfolios
+      const portfoliosSnap = await getDocs(collection(db, 'portfolios'));
+      let batch = writeBatch(db);
+      let count = 0;
+      for (const d of portfoliosSnap.docs) {
+        batch.delete(d.ref);
+        count++;
+        if (count === 499) { await batch.commit(); batch = writeBatch(db); count = 0; }
+      }
+      if (count > 0) await batch.commit();
+
+      setResetStatus('Clearing trade listings...');
+      // 2. Delete all tradeListings
+      const tradeSnap = await getDocs(collection(db, 'tradeListings'));
+      batch = writeBatch(db); count = 0;
+      for (const d of tradeSnap.docs) {
+        batch.delete(d.ref);
+        count++;
+        if (count === 499) { await batch.commit(); batch = writeBatch(db); count = 0; }
+      }
+      if (count > 0) await batch.commit();
+
+      setResetStatus('Clearing submissions & votes...');
+      // 3. Delete submissions
+      const subsSnap = await getDocs(collection(db, 'submissions'));
+      batch = writeBatch(db); count = 0;
+      for (const d of subsSnap.docs) {
+        batch.delete(d.ref);
+        count++;
+        if (count === 499) { await batch.commit(); batch = writeBatch(db); count = 0; }
+      }
+      if (count > 0) await batch.commit();
+
+      // 4. Delete votes
+      const votesSnap = await getDocs(collection(db, 'votes'));
+      batch = writeBatch(db); count = 0;
+      for (const d of votesSnap.docs) {
+        batch.delete(d.ref);
+        count++;
+        if (count === 499) { await batch.commit(); batch = writeBatch(db); count = 0; }
+      }
+      if (count > 0) await batch.commit();
+
+      setResetStatus('Resetting meme prices...');
+      // 5. Reset meme prices & availableShares
+      const memesSnap = await getDocs(collection(db, 'memes'));
+      batch = writeBatch(db); count = 0;
+      for (const d of memesSnap.docs) {
+        const data = d.data();
+        batch.update(d.ref, {
+          currentPrice: data.initialPrice,
+          availableShares: data.totalShares,
+        });
+        count++;
+        if (count === 499) { await batch.commit(); batch = writeBatch(db); count = 0; }
+      }
+      if (count > 0) await batch.commit();
+
+      setResetStatus('Resetting team budgets...');
+      // 6. Reset team budgets
+      batch = writeBatch(db); count = 0;
+      const teamUsers = users.filter(u => u.role === 'team');
+      for (const u of teamUsers) {
+        batch.update(doc(db, 'users', u.id), { budget: STARTING_BUDGET });
+        count++;
+        if (count === 499) { await batch.commit(); batch = writeBatch(db); count = 0; }
+      }
+      if (count > 0) await batch.commit();
+
+      setResetStatus('Resetting game state...');
+      // 7. Reset gameState
+      const gameRef = doc(db, 'gameState', 'current');
+      const existing = await getDoc(gameRef);
+      if (existing.exists()) {
+        await setDoc(gameRef, {
+          currentRound: 0,
+          status: 'setup',
+          activeScenarioId: null,
+          tradeRoundActive: false,
+        });
+      }
+
+      setResetStatus('✅ Reset complete! Game is back to Day 1.');
+      setTimeout(() => {
+        setShowResetConfirm(false);
+        setResetStatus('');
+      }, 2500);
+    } catch (error) {
+      console.error('Reset failed:', error);
+      setResetStatus('❌ Reset failed. Check console.');
+    } finally {
+      setResetting(false);
+    }
+  };
 
   /* ── Add user ── */
   const handleAddUser = async (e: React.FormEvent) => {
@@ -65,7 +174,7 @@ export default function AdminUsers() {
         name: newUser.name || newUser.username,
         budget: newUser.role === 'team' ? Number(newUser.budget) : 0,
       });
-      setNewUser({ username: '', password: '', email: '', role: 'team', name: '', budget: 42069 });
+      setNewUser({ username: '', password: '', email: '', role: 'team', name: '', budget: STARTING_BUDGET });
       setIsAdding(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'users');
@@ -74,7 +183,7 @@ export default function AdminUsers() {
     }
   };
 
-  /* ── Start inline edit ── */
+  /* ── Inline edit ── */
   const startEdit = (user: AppUser) => {
     setEditingId(user.id);
     setEditState({
@@ -84,11 +193,9 @@ export default function AdminUsers() {
       role: user.role || 'team',
       name: user.name || '',
     });
-    // Show password while editing
     setShowPass(p => ({ ...p, [user.id]: true }));
   };
 
-  /* ── Save inline edit ── */
   const saveEdit = async (userId: string) => {
     setSavingId(userId);
     try {
@@ -126,7 +233,6 @@ export default function AdminUsers() {
     return (order[a.role as keyof typeof order] ?? 3) - (order[b.role as keyof typeof order] ?? 3);
   });
 
-  /* ── Shared input style ── */
   const inputCls = 'w-full bg-surface-container-high border border-outline-variant rounded-lg px-2.5 py-1.5 text-on-surface text-sm focus:border-primary focus:outline-none font-mono';
 
   return (
@@ -140,19 +246,79 @@ export default function AdminUsers() {
           </h1>
           <p className="text-on-surface-variant mt-1">Add and manage all participants</p>
         </div>
-        <button
-          onClick={() => setIsAdding(!isAdding)}
-          className={clsx(
-            'flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all',
-            isAdding
-              ? 'bg-surface-variant text-on-surface-variant'
-              : 'bg-primary text-on-primary shadow-[0_0_15px_rgba(242,253,104,0.2)] hover:shadow-[0_0_20px_rgba(242,253,104,0.3)]'
-          )}
-        >
-          <UserPlus size={20} />
-          {isAdding ? 'Cancel' : 'Add User'}
-        </button>
+        <div className="flex gap-3 flex-wrap">
+          {/* Reset Game Button */}
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold border border-error/40 text-error hover:bg-error/10 transition-all"
+          >
+            <RotateCcw size={18} />
+            Reset Game
+          </button>
+          <button
+            onClick={() => setIsAdding(!isAdding)}
+            className={clsx(
+              'flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all',
+              isAdding
+                ? 'bg-surface-variant text-on-surface-variant'
+                : 'bg-primary text-on-primary shadow-[0_0_15px_rgba(242,253,104,0.2)] hover:shadow-[0_0_20px_rgba(242,253,104,0.3)]'
+            )}
+          >
+            <UserPlus size={20} />
+            {isAdding ? 'Cancel' : 'Add User'}
+          </button>
+        </div>
       </div>
+
+      {/* ── Reset Game Confirmation Modal ── */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-surface-container border border-error/40 rounded-3xl p-8 max-w-md w-full shadow-[0_0_40px_rgba(239,68,68,0.15)] space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-error/10 rounded-full flex items-center justify-center shrink-0">
+                <AlertTriangle className="text-error" size={24} />
+              </div>
+              <div>
+                <h2 className="text-xl font-headline font-bold text-on-surface">Reset Game?</h2>
+                <p className="text-sm text-on-surface-variant">This cannot be undone.</p>
+              </div>
+            </div>
+            <div className="bg-surface-variant rounded-2xl p-4 space-y-2 text-sm text-on-surface-variant">
+              <p className="font-bold text-on-surface mb-2">This will:</p>
+              <p>🗑️ Delete all portfolios & trade listings</p>
+              <p>🗑️ Delete all scenario submissions & votes</p>
+              <p>🔄 Reset all meme prices to initial values</p>
+              <p>💰 Reset all team budgets to ${STARTING_BUDGET.toLocaleString()}</p>
+              <p>⚙️ Set game state back to Setup (Round 0)</p>
+              <p className="text-on-surface font-medium mt-2">✅ Users & meme catalog are kept.</p>
+            </div>
+
+            {resetStatus && (
+              <div className="bg-surface-variant rounded-xl p-3 text-sm font-mono text-on-surface animate-pulse">
+                {resetStatus}
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowResetConfirm(false); setResetStatus(''); }}
+                disabled={resetting}
+                className="flex-1 py-3 rounded-xl bg-surface-variant text-on-surface-variant font-bold hover:text-on-surface transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleResetGame}
+                disabled={resetting}
+                className="flex-1 py-3 rounded-xl bg-error text-white font-bold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                <RotateCcw size={18} className={resetting ? 'animate-spin' : ''} />
+                {resetting ? 'Resetting...' : 'Yes, Reset Everything'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Default Credentials Banner */}
       <div className="bg-surface-container border border-outline-variant rounded-2xl p-4">
@@ -267,77 +433,47 @@ export default function AdminUsers() {
             <tbody className="divide-y divide-outline-variant">
               {sortedUsers.map(user => {
                 const isEditing = editingId === user.id;
-
                 return (
                   <tr
                     key={user.id}
-                    className={clsx(
-                      'transition-colors',
-                      isEditing ? 'bg-primary/5' : 'hover:bg-surface-variant/30'
-                    )}
+                    className={clsx('transition-colors', isEditing ? 'bg-primary/5' : 'hover:bg-surface-variant/30')}
                     onKeyDown={e => {
                       if (!isEditing) return;
                       if (e.key === 'Enter') saveEdit(user.id);
                       if (e.key === 'Escape') cancelEdit();
                     }}
                   >
-                    {/* Name */}
                     <td className="p-3">
                       {isEditing ? (
-                        <input
-                          value={editState.name}
-                          onChange={e => setEditState(s => ({ ...s, name: e.target.value }))}
-                          className={inputCls}
-                          autoFocus
-                        />
+                        <input value={editState.name} onChange={e => setEditState(s => ({ ...s, name: e.target.value }))} className={inputCls} autoFocus />
                       ) : (
                         <span className="font-bold text-on-surface">{user.name || user.username}</span>
                       )}
                     </td>
-
-                    {/* Username */}
                     <td className="p-3">
                       {isEditing ? (
-                        <input
-                          value={editState.username}
-                          onChange={e => setEditState(s => ({ ...s, username: e.target.value }))}
-                          className={inputCls}
-                        />
+                        <input value={editState.username} onChange={e => setEditState(s => ({ ...s, username: e.target.value }))} className={inputCls} />
                       ) : (
                         <span className="font-mono text-on-surface">{user.username}</span>
                       )}
                     </td>
-
-                    {/* Password */}
                     <td className="p-3">
                       {isEditing ? (
-                        <input
-                          value={editState.password}
-                          onChange={e => setEditState(s => ({ ...s, password: e.target.value }))}
-                          className={inputCls}
-                          placeholder="new password"
-                        />
+                        <input value={editState.password} onChange={e => setEditState(s => ({ ...s, password: e.target.value }))} className={inputCls} placeholder="new password" />
                       ) : (
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-on-surface-variant">
                             {showPass[user.id] ? (user.password || '—') : '••••••••'}
                           </span>
-                          <button onClick={() => togglePass(user.id)}
-                            className="text-on-surface-variant hover:text-on-surface transition-colors shrink-0">
+                          <button onClick={() => togglePass(user.id)} className="text-on-surface-variant hover:text-on-surface transition-colors shrink-0">
                             {showPass[user.id] ? <EyeOff size={13} /> : <Eye size={13} />}
                           </button>
                         </div>
                       )}
                     </td>
-
-                    {/* Role */}
                     <td className="p-3">
                       {isEditing ? (
-                        <select
-                          value={editState.role}
-                          onChange={e => setEditState(s => ({ ...s, role: e.target.value }))}
-                          className={clsx(inputCls, 'font-sans')}
-                        >
+                        <select value={editState.role} onChange={e => setEditState(s => ({ ...s, role: e.target.value }))} className={clsx(inputCls, 'font-sans')}>
                           <option value="team">Team</option>
                           <option value="audience">Audience</option>
                           <option value="admin">Admin</option>
@@ -348,62 +484,36 @@ export default function AdminUsers() {
                         </span>
                       )}
                     </td>
-
-                    {/* Budget */}
                     <td className="p-3">
                       {isEditing && editState.role === 'team' ? (
-                        <input
-                          type="number"
-                          min="0"
-                          value={editState.budget}
-                          onChange={e => setEditState(s => ({ ...s, budget: Number(e.target.value) }))}
-                          className={clsx(inputCls, 'w-28')}
-                        />
+                        <input type="number" min="0" value={editState.budget} onChange={e => setEditState(s => ({ ...s, budget: Number(e.target.value) }))} className={clsx(inputCls, 'w-28')} />
                       ) : (
-                        <span className={clsx(
-                          'font-mono font-bold',
-                          (isEditing ? editState.role : user.role) === 'team' ? 'text-primary' : 'text-on-surface-variant'
-                        )}>
+                        <span className={clsx('font-mono font-bold', (isEditing ? editState.role : user.role) === 'team' ? 'text-primary' : 'text-on-surface-variant')}>
                           {user.role === 'team' ? `$${(user.budget || 0).toLocaleString()}` : '—'}
                         </span>
                       )}
                     </td>
-
-                    {/* Actions */}
                     <td className="p-3">
                       <div className="flex items-center justify-center gap-1.5">
                         {isEditing ? (
                           <>
-                            <button
-                              onClick={() => saveEdit(user.id)}
-                              disabled={savingId === user.id}
-                              className="bg-primary text-on-primary p-1.5 rounded-lg hover:bg-primary-dim transition-colors disabled:opacity-50"
-                              title="Save (Enter)"
-                            >
+                            <button onClick={() => saveEdit(user.id)} disabled={savingId === user.id}
+                              className="bg-primary text-on-primary p-1.5 rounded-lg hover:bg-primary-dim transition-colors disabled:opacity-50" title="Save (Enter)">
                               <Check size={15} />
                             </button>
-                            <button
-                              onClick={cancelEdit}
-                              className="bg-surface-variant text-on-surface-variant p-1.5 rounded-lg hover:text-on-surface transition-colors"
-                              title="Cancel (Esc)"
-                            >
+                            <button onClick={cancelEdit}
+                              className="bg-surface-variant text-on-surface-variant p-1.5 rounded-lg hover:text-on-surface transition-colors" title="Cancel (Esc)">
                               <X size={15} />
                             </button>
                           </>
                         ) : (
                           <>
-                            <button
-                              onClick={() => startEdit(user)}
-                              className="text-on-surface-variant hover:text-primary transition-colors p-1.5 rounded-lg hover:bg-primary/10"
-                              title="Edit user"
-                            >
+                            <button onClick={() => startEdit(user)}
+                              className="text-on-surface-variant hover:text-primary transition-colors p-1.5 rounded-lg hover:bg-primary/10" title="Edit user">
                               <Pencil size={15} />
                             </button>
-                            <button
-                              onClick={() => handleDelete(user.id)}
-                              className="text-on-surface-variant hover:text-error transition-colors p-1.5 rounded-lg hover:bg-error/10"
-                              title="Delete user"
-                            >
+                            <button onClick={() => handleDelete(user.id)}
+                              className="text-on-surface-variant hover:text-error transition-colors p-1.5 rounded-lg hover:bg-error/10" title="Delete user">
                               <Trash2 size={15} />
                             </button>
                           </>

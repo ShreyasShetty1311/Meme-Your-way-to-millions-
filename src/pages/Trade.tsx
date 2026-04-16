@@ -5,7 +5,7 @@ import {
   runTransaction, getDocs, query, where,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { Tag, ShoppingCart, CheckCircle, XCircle, Trash2, BarChart2, AlertCircle } from 'lucide-react';
+import { Tag, ShoppingCart, CheckCircle, XCircle, Trash2, BarChart2, AlertCircle, Minus, Plus } from 'lucide-react';
 import clsx from 'clsx';
 
 const MIN_SHARES = 3;
@@ -22,8 +22,9 @@ export default function Trade() {
   const [isListing, setIsListing] = useState(false);
   const [sellMsg, setSellMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Buy state
+  // Buy state — qty per listing id
   const [buyingId, setBuyingId] = useState<string | null>(null);
+  const [buyQty, setBuyQty] = useState<Record<string, number>>({});
   const [buyMsg, setBuyMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const isTradeActive = gameState?.tradeRoundActive === true;
@@ -48,6 +49,13 @@ export default function Trade() {
   const sharesBought = boughtByMe.reduce((s, l) => s + l.shares, 0);
   const isEligible = sharesSold >= MIN_SHARES && sharesBought >= MIN_SHARES;
 
+  // Helper: get qty for a listing (default 1)
+  const getQty = (listingId: string, max: number) =>
+    Math.min(Math.max(buyQty[listingId] ?? 1, 1), max);
+
+  const setQty = (listingId: string, val: number, max: number) =>
+    setBuyQty(q => ({ ...q, [listingId]: Math.min(Math.max(val, 1), max) }));
+
   // Create a sell listing (reserves shares from portfolio)
   const handleList = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,11 +72,9 @@ export default function Trade() {
         if (!portSnap.exists()) throw new Error('Portfolio entry not found.');
         const current: number = portSnap.data().shares;
         if (current < sellShares) throw new Error(`Only ${current} shares available.`);
-        // Reserve shares (deduct from portfolio)
         if (current - sellShares === 0) transaction.delete(portRef);
         else transaction.update(portRef, { shares: current - sellShares });
       });
-      // Create listing
       await addDoc(collection(db, 'tradeListings'), {
         sellerId: appUser.id,
         memeId: sellMemeId,
@@ -92,7 +98,6 @@ export default function Trade() {
   const handleCancelListing = async (listing: typeof tradeListings[0]) => {
     if (!appUser) return;
     try {
-      // Return shares to portfolio
       const portSnap = await getDocs(
         query(collection(db, 'portfolios'), where('userId', '==', appUser.id), where('memeId', '==', listing.memeId))
       );
@@ -113,11 +118,13 @@ export default function Trade() {
     }
   };
 
-  // Buy a listing
+  // Buy a listing — supports partial qty
   const handleBuy = async (listing: typeof tradeListings[0]) => {
     if (!appUser) return;
     const meme = memes.find(m => m.id === listing.memeId);
-    const totalCost = listing.pricePerShare * listing.shares;
+    const qty = getQty(listing.id, listing.shares);
+    const totalCost = listing.pricePerShare * qty;
+
     if ((appUser.budget || 0) < totalCost) {
       setBuyMsg({ type: 'error', text: `Not enough budget. Need $${totalCost.toLocaleString()}.` });
       return;
@@ -129,12 +136,12 @@ export default function Trade() {
       const listingRef = doc(db, 'tradeListings', listing.id);
       const sellerRef = doc(db, 'users', listing.sellerId);
       const buyerRef = doc(db, 'users', appUser.id);
+      const isBuyingAll = qty === listing.shares;
 
-      // Check if buyer already has this meme
+      // Buyer's existing portfolio for this meme
       const buyerPortSnap = await getDocs(
         query(collection(db, 'portfolios'), where('userId', '==', appUser.id), where('memeId', '==', listing.memeId))
       );
-
       let buyerPortRef: ReturnType<typeof doc> | null = null;
       let existingShares = 0;
       let existingAvg = 0;
@@ -156,28 +163,48 @@ export default function Trade() {
         const sellerBudget: number = sellerSnap.data()?.budget || 0;
         if (buyerBudget < totalCost) throw new Error('Insufficient budget.');
 
-        // Mark listing sold
-        transaction.update(listingRef, { status: 'sold', buyerId: appUser.id });
-        // Deduct buyer, credit seller
+        const remainingShares = listing.shares - qty;
+
+        if (isBuyingAll) {
+          // Mark listing fully sold
+          transaction.update(listingRef, { status: 'sold', buyerId: appUser.id });
+        } else {
+          // Partial buy: reduce listing shares, create a sold record for audit
+          transaction.update(listingRef, { shares: remainingShares });
+          // Add a sold sub-record for eligibility tracking
+          const soldRef = doc(collection(db, 'tradeListings'));
+          transaction.set(soldRef, {
+            sellerId: listing.sellerId,
+            memeId: listing.memeId,
+            shares: qty,
+            pricePerShare: listing.pricePerShare,
+            createdAt: Date.now(),
+            status: 'sold',
+            buyerId: appUser.id,
+          });
+        }
+
+        // Money transfer
         transaction.update(buyerRef, { budget: buyerBudget - totalCost });
         transaction.update(sellerRef, { budget: sellerBudget + totalCost });
+
         // Add to buyer portfolio
         if (buyerPortRef) {
-          const newShares = existingShares + listing.shares;
-          const newAvg = ((existingShares * existingAvg) + (listing.shares * listing.pricePerShare)) / newShares;
+          const newShares = existingShares + qty;
+          const newAvg = ((existingShares * existingAvg) + (qty * listing.pricePerShare)) / newShares;
           transaction.update(buyerPortRef, { shares: newShares, averagePrice: newAvg });
         } else {
           const newRef = doc(collection(db, 'portfolios'));
           transaction.set(newRef, {
             userId: appUser.id,
             memeId: listing.memeId,
-            shares: listing.shares,
+            shares: qty,
             averagePrice: listing.pricePerShare,
           });
         }
       });
 
-      setBuyMsg({ type: 'success', text: `✅ Bought ${listing.shares} shares of "${meme?.name}" for $${totalCost.toLocaleString()}.` });
+      setBuyMsg({ type: 'success', text: `✅ Bought ${qty} share${qty > 1 ? 's' : ''} of "${meme?.name}" for $${totalCost.toLocaleString()}.` });
     } catch (err: any) {
       setBuyMsg({ type: 'error', text: err.message || 'Purchase failed.' });
     } finally {
@@ -255,7 +282,6 @@ export default function Trade() {
       {/* ──── SELL TAB ──── */}
       {tab === 'sell' && (
         <div className="space-y-6">
-          {/* Listing form */}
           <form onSubmit={handleList} className="bg-surface-container border border-outline-variant rounded-3xl p-6 space-y-5">
             <h2 className="font-headline font-bold text-on-surface text-lg">List a Meme for Sale</h2>
             {sellMsg && (
@@ -303,7 +329,6 @@ export default function Trade() {
             </button>
           </form>
 
-          {/* My active listings */}
           {myListings.length > 0 && (
             <div className="bg-surface-container border border-outline-variant rounded-3xl overflow-hidden">
               <div className="px-6 py-4 border-b border-outline-variant">
@@ -363,7 +388,8 @@ export default function Trade() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {marketListings.map(listing => {
                 const meme = memes.find(m => m.id === listing.memeId);
-                const totalCost = listing.pricePerShare * listing.shares;
+                const qty = getQty(listing.id, listing.shares);
+                const totalCost = listing.pricePerShare * qty;
                 const canAfford = (appUser?.budget || 0) >= totalCost;
                 const isBuying = buyingId === listing.id;
 
@@ -376,17 +402,56 @@ export default function Trade() {
                         <div className="absolute bottom-2 left-3 right-3">
                           <p className="font-bold text-white text-sm drop-shadow-md truncate">{meme.name}</p>
                         </div>
+                        {/* Available shares badge */}
+                        <div className="absolute top-2 right-2 bg-background/70 backdrop-blur-sm text-on-surface text-xs font-mono font-bold px-2 py-1 rounded-lg">
+                          {listing.shares} avail.
+                        </div>
                       </div>
                     )}
                     <div className="p-4 flex flex-col gap-3 flex-1">
+                      {/* Price info */}
                       <div className="flex justify-between text-sm">
-                        <span className="text-on-surface-variant">{listing.shares} shares</span>
+                        <span className="text-on-surface-variant">Per share</span>
                         <span className="font-mono font-bold text-primary">${listing.pricePerShare}/share</span>
                       </div>
-                      <div className="flex justify-between text-sm items-center">
-                        <span className="text-on-surface-variant">Total</span>
-                        <span className="font-mono font-bold text-tertiary text-base">${totalCost.toLocaleString()}</span>
+
+                      {/* Qty selector */}
+                      <div>
+                        <label className="block text-xs text-on-surface-variant mb-1.5">Quantity to buy</label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setQty(listing.id, qty - 1, listing.shares)}
+                            disabled={qty <= 1}
+                            className="w-8 h-8 rounded-lg bg-surface-variant border border-outline-variant flex items-center justify-center text-on-surface disabled:opacity-30 hover:border-primary transition-colors shrink-0"
+                          >
+                            <Minus size={14} />
+                          </button>
+                          <input
+                            type="number"
+                            min={1}
+                            max={listing.shares}
+                            value={qty}
+                            onChange={e => setQty(listing.id, parseInt(e.target.value) || 1, listing.shares)}
+                            className="flex-1 bg-surface-variant border border-outline-variant rounded-lg px-2 py-1.5 text-center font-mono text-on-surface focus:border-primary focus:outline-none text-sm"
+                          />
+                          <button
+                            onClick={() => setQty(listing.id, qty + 1, listing.shares)}
+                            disabled={qty >= listing.shares}
+                            className="w-8 h-8 rounded-lg bg-surface-variant border border-outline-variant flex items-center justify-center text-on-surface disabled:opacity-30 hover:border-primary transition-colors shrink-0"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
                       </div>
+
+                      {/* Total cost */}
+                      <div className="flex justify-between text-sm items-center bg-surface-variant rounded-xl px-3 py-2">
+                        <span className="text-on-surface-variant">Total cost</span>
+                        <span className={clsx('font-mono font-bold text-base', canAfford ? 'text-tertiary' : 'text-error')}>
+                          ${totalCost.toLocaleString()}
+                        </span>
+                      </div>
+
                       <button
                         onClick={() => handleBuy(listing)}
                         disabled={isBuying || !canAfford}
@@ -398,7 +463,7 @@ export default function Trade() {
                         )}
                       >
                         <ShoppingCart size={16} />
-                        {isBuying ? 'Buying...' : canAfford ? 'Buy Now' : "Can't Afford"}
+                        {isBuying ? 'Buying...' : canAfford ? `Buy ${qty} Share${qty > 1 ? 's' : ''}` : "Can't Afford"}
                       </button>
                     </div>
                   </div>

@@ -38,7 +38,7 @@ function App() {
       try {
         // 1. Bootstrap default users if they don't exist
         try {
-          const q = query(collection(db, 'users'), where('username', '==', 'admin'));
+          const q = query(collection(db, 'users'), where('role', '==', 'admin'));
           const snap = await getDocs(q);
           if (snap.empty) {
             await setDoc(doc(collection(db, 'users')), { username: 'admin', password: 'admin@123', role: 'admin', name: 'Admin' });
