@@ -25,28 +25,49 @@ function App() {
 
   useEffect(() => {
     const initAuth = async () => {
+      // ── Session version guard ──────────────────────────────────────────────
+      // Bump SESSION_VERSION whenever you migrate Firebase projects or rename
+      // the app, so stale localStorage user IDs from the old project are
+      // automatically cleared and users are redirected to the login page.
+      const SESSION_VERSION = 'v2'; // <-- bump this on project migration
+      if (localStorage.getItem('sessionVersion') !== SESSION_VERSION) {
+        localStorage.removeItem('userId');
+        localStorage.setItem('sessionVersion', SESSION_VERSION);
+      }
+
       try {
         // 1. Bootstrap default users if they don't exist
-        const q = query(collection(db, 'users'), where('username', '==', 'admin'));
-        const snap = await getDocs(q);
-        if (snap.empty) {
-          await setDoc(doc(collection(db, 'users')), { username: 'admin', password: 'admin@123', role: 'admin', name: 'Admin' });
-          await setDoc(doc(collection(db, 'users')), { username: 'voter', password: 'voter@bmsce', role: 'audience', name: 'Voter' });
-          await setDoc(doc(collection(db, 'users')), { username: 'user', password: 'user@1', role: 'team', name: 'Team 1', budget: 42069 });
+        try {
+          const q = query(collection(db, 'users'), where('username', '==', 'admin'));
+          const snap = await getDocs(q);
+          if (snap.empty) {
+            await setDoc(doc(collection(db, 'users')), { username: 'admin', password: 'admin@123', role: 'admin', name: 'Admin' });
+            await setDoc(doc(collection(db, 'users')), { username: 'voter', password: 'voter@bmsce', role: 'audience', name: 'Voter' });
+            await setDoc(doc(collection(db, 'users')), { username: 'user', password: 'user@1', role: 'team', name: 'Team 1', budget: 42069 });
+          }
+        } catch (bootstrapErr) {
+          // Non-fatal: bootstrap only fails on first load with bad connection
+          console.warn("Bootstrap skipped:", bootstrapErr);
         }
 
         // 2. Check local storage for existing session
         const userId = localStorage.getItem('userId');
         if (userId) {
-          const userDoc = await getDoc(doc(db, 'users', userId));
-          if (userDoc.exists()) {
-            setAppUser({ id: userDoc.id, ...userDoc.data() } as AppUser);
-          } else {
+          try {
+            const userDoc = await getDoc(doc(db, 'users', userId));
+            if (userDoc.exists()) {
+              setAppUser({ id: userDoc.id, ...userDoc.data() } as AppUser);
+            } else {
+              // Stale session: user doc no longer exists (e.g. after project migration)
+              console.warn(`Session user '${userId}' not found in Firestore — clearing session.`);
+              localStorage.removeItem('userId');
+            }
+          } catch (sessionErr) {
+            // Network or permission error restoring session — clear and re-login
+            console.warn("Could not restore session:", sessionErr);
             localStorage.removeItem('userId');
           }
         }
-      } catch (error) {
-        console.error("Error initializing auth:", error);
       } finally {
         setAuthReady(true);
         setLoading(false);
