@@ -105,6 +105,7 @@ export const useStore = create<AppState>((set) => ({
   setAuthReady: (ready) => set({ isAuthReady: ready }),
   logout: () => {
     localStorage.removeItem('userId');
+    localStorage.removeItem('loginRole');
     set({ appUser: null, portfolio: [] });
   },
 }));

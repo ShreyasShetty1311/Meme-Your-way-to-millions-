@@ -29,9 +29,10 @@ function App() {
       // Bump SESSION_VERSION whenever you migrate Firebase projects or rename
       // the app, so stale localStorage user IDs from the old project are
       // automatically cleared and users are redirected to the login page.
-      const SESSION_VERSION = 'v2'; // <-- bump this on project migration
+      const SESSION_VERSION = 'v3'; // bumped: role-pin security added
       if (localStorage.getItem('sessionVersion') !== SESSION_VERSION) {
         localStorage.removeItem('userId');
+        localStorage.removeItem('loginRole');
         localStorage.setItem('sessionVersion', SESSION_VERSION);
       }
 
@@ -52,20 +53,38 @@ function App() {
 
         // 2. Check local storage for existing session
         const userId = localStorage.getItem('userId');
+        const loginRole = localStorage.getItem('loginRole'); // role the user actually logged in with
         if (userId) {
           try {
             const userDoc = await getDoc(doc(db, 'users', userId));
             if (userDoc.exists()) {
-              setAppUser({ id: userDoc.id, ...userDoc.data() } as AppUser);
+              const firestoreRole = userDoc.data().role;
+
+              // ── Role-pin security check ──────────────────────────────────────
+              // If the Firestore role is 'admin' but the stored loginRole is NOT
+              // 'admin', someone swapped their userId to an admin's in localStorage.
+              // Also guard the reverse: if Firestore says team/audience but stored
+              // loginRole says admin, that means the admin doc was re-used.
+              // In either mismatch case, kill the session immediately.
+              const roleMismatch = loginRole && firestoreRole !== loginRole;
+              if (roleMismatch) {
+                console.warn(`Role mismatch: localStorage loginRole='${loginRole}' vs Firestore role='${firestoreRole}'. Clearing session.`);
+                localStorage.removeItem('userId');
+                localStorage.removeItem('loginRole');
+              } else {
+                setAppUser({ id: userDoc.id, ...userDoc.data() } as AppUser);
+              }
             } else {
               // Stale session: user doc no longer exists (e.g. after project migration)
               console.warn(`Session user '${userId}' not found in Firestore — clearing session.`);
               localStorage.removeItem('userId');
+              localStorage.removeItem('loginRole');
             }
           } catch (sessionErr) {
             // Network or permission error restoring session — clear and re-login
-            console.warn("Could not restore session:", sessionErr);
+            console.warn('Could not restore session:', sessionErr);
             localStorage.removeItem('userId');
+            localStorage.removeItem('loginRole');
           }
         }
       } finally {

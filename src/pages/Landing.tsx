@@ -31,6 +31,7 @@ export default function Landing() {
 
       if (matchingDoc) {
         localStorage.setItem('userId', matchingDoc.id);
+        localStorage.setItem('loginRole', matchingDoc.data().role); // role pin for security
         setAppUser({ id: matchingDoc.id, ...matchingDoc.data() } as AppUser);
       } else {
         setError('Invalid credentials');
