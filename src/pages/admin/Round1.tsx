@@ -212,14 +212,16 @@ export default function AdminRound1() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-on-surface-variant mb-1.5">Price per Share ($)</label>
-                  <input required type="number" min="1" value={newMeme.initialPrice}
-                    onChange={e => setNewMeme({ ...newMeme, initialPrice: Number(e.target.value) })}
+                  <input required type="number" min="1" step="1" value={newMeme.initialPrice}
+                    onFocus={(e) => e.target.select()}
+                    onChange={e => setNewMeme({ ...newMeme, initialPrice: Math.max(1, Math.round(Number(e.target.value))) })}
                     className="w-full bg-surface-variant border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface font-mono focus:border-primary focus:outline-none" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-on-surface-variant mb-1.5">Total Shares</label>
-                  <input required type="number" min="1" value={newMeme.totalShares}
-                    onChange={e => setNewMeme({ ...newMeme, totalShares: Number(e.target.value) })}
+                  <input required type="number" min="1" step="1" value={newMeme.totalShares}
+                    onFocus={(e) => e.target.select()}
+                    onChange={e => setNewMeme({ ...newMeme, totalShares: Math.max(1, Math.round(Number(e.target.value))) })}
                     className="w-full bg-surface-variant border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface font-mono focus:border-primary focus:outline-none" />
                 </div>
               </div>
@@ -280,7 +282,7 @@ export default function AdminRound1() {
                     <div className={clsx('flex items-center gap-1 px-2 py-1 rounded-md text-xs font-bold backdrop-blur-md',
                       isUp ? 'bg-primary/20 text-primary' : 'bg-error/20 text-error')}>
                       {isUp ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-                      ${meme.currentPrice.toFixed(2)}
+                      ${Math.round(meme.currentPrice)}
                     </div>
                   </div>
                 </div>
@@ -303,7 +305,7 @@ export default function AdminRound1() {
                     <div className="space-y-2 text-sm border-t border-outline-variant pt-3">
                       <div className="flex justify-between">
                         <span className="text-on-surface-variant">Initial Price</span>
-                        <span className="font-mono">${meme.initialPrice.toFixed(2)}</span>
+                        <span className="font-mono">${Math.round(meme.initialPrice)}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-on-surface-variant">Available</span>

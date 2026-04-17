@@ -178,8 +178,8 @@ export default function Progress() {
                     <p className="font-bold text-on-surface truncate">{item.meme.name}</p>
                     <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 text-xs text-on-surface-variant">
                       <span>Shares: <span className="font-mono font-bold text-on-surface">{item.shares}</span></span>
-                      <span>Avg Price: <span className="font-mono">${item.averagePrice.toFixed(2)}</span></span>
-                      <span>Current: <span className="font-mono">${item.meme.currentPrice.toFixed(2)}</span></span>
+                      <span>Avg Price: <span className="font-mono">${Math.round(item.averagePrice)}</span></span>
+                      <span>Current: <span className="font-mono">${Math.round(item.meme.currentPrice)}</span></span>
                     </div>
                   </div>
 

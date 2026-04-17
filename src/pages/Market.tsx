@@ -61,10 +61,9 @@ export default function Market() {
           throw new Error('Insufficient funds!');
         }
 
-        // Update Meme
+        // Update Meme — only deduct shares, price stays fixed
         transaction.update(memeRef, {
           availableShares: memeData.availableShares - qty,
-          currentPrice: memeData.currentPrice + qty * 0.5,
         });
 
         // Update User Budget
@@ -125,16 +124,16 @@ export default function Market() {
         {memes.map((meme) => {
           const buyAmount = getBuyAmount(meme.id);
           const isBuying = buyingMeme === meme.id;
-          const priceChange = meme.currentPrice - meme.initialPrice;
-          const isUp = priceChange >= 0;
+          // Prices are static — always show as whole numbers
+          const isUp = true;
           const myPortfolio = portfolio.find(p => p.memeId === meme.id);
 
           return (
             <div key={meme.id} className="bg-surface-container border border-outline-variant rounded-3xl overflow-hidden flex flex-col neon-glow-box transition-all duration-300">
               <div className="h-48 bg-surface-variant relative overflow-hidden group">
-                <img 
-                  src={meme.imageUrl} 
-                  alt={meme.name} 
+                <img
+                  src={meme.imageUrl}
+                  alt={meme.name}
                   className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                   referrerPolicy="no-referrer"
                 />
@@ -146,23 +145,23 @@ export default function Market() {
                     isUp ? "bg-primary/20 text-primary" : "bg-error/20 text-error"
                   )}>
                     {isUp ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                    ${meme.currentPrice.toFixed(2)}
+                    ${Math.round(meme.currentPrice)}
                   </div>
                 </div>
               </div>
-              
+
               <div className="p-5 flex-1 flex flex-col">
                 <div className="flex justify-between items-center mb-4 text-sm">
                   <span className="text-on-surface-variant">Available Shares</span>
                   <span className="font-mono font-bold text-on-surface">{meme.availableShares} / {meme.totalShares}</span>
                 </div>
-                
+
                 {myPortfolio && myPortfolio.shares > 0 && (
                   <div className="mb-4 p-3 bg-surface-variant rounded-xl border border-outline-variant/50">
                     <p className="text-xs text-on-surface-variant mb-1">Your Position</p>
                     <div className="flex justify-between items-center">
                       <span className="font-mono font-bold text-primary">{myPortfolio.shares} shares</span>
-                      <span className="font-mono text-sm text-on-surface-variant">Avg: ${myPortfolio.averagePrice.toFixed(2)}</span>
+                      <span className="font-mono text-sm text-on-surface-variant">Avg: ${Math.round(myPortfolio.averagePrice)}</span>
                     </div>
                   </div>
                 )}
@@ -171,12 +170,14 @@ export default function Market() {
                   <input
                     type="number"
                     min="1"
+                    step="1"
                     max={meme.availableShares}
-                    value={buyAmount}
-                    onChange={(e) => setBuyAmount(meme.id, parseInt(e.target.value) || 1)}
+                    value={buyAmount || ''}
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setBuyAmount(meme.id, Math.max(1, parseInt(e.target.value) || 1))}
                     className="w-20 bg-surface-variant border border-outline-variant rounded-xl px-3 py-2 text-center font-mono text-on-surface focus:outline-none focus:border-primary"
                   />
-                  <button 
+                  <button
                     onClick={() => handleBuy(meme.id)}
                     disabled={isBuying || meme.availableShares === 0 || (appUser?.budget || 0) < meme.currentPrice * buyAmount}
                     className="flex-1 bg-primary hover:bg-primary-dim disabled:bg-surface-variant disabled:text-on-surface-variant text-on-primary font-bold py-2 rounded-xl transition-colors"

@@ -61,7 +61,9 @@ export default function Trade() {
   const boughtByMe = soldListings.filter((l) => l.buyerId === appUser?.id);
   const sharesSold = soldByMe.reduce((s, l) => s + l.shares, 0);
   const sharesBought = boughtByMe.reduce((s, l) => s + l.shares, 0);
-  const isEligible = sharesSold >= MIN_SHARES && sharesBought >= MIN_SHARES;
+  // No restriction — every team is always eligible to trade.
+  // The counters below are kept as a soft activity indicator only.
+  const isEligible = true;
 
   // Store now only keeps status='active' listings, so no status filter needed here
   const myListings = tradeListings.filter((l) => l.sellerId === appUser?.id);
@@ -354,14 +356,16 @@ export default function Trade() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-on-surface-variant mb-1.5">Shares to List <span className="text-primary">(max {maxSell})</span></label>
-                <input required type="number" min="1" max={maxSell} value={sellShares}
-                  onChange={e => setSellShares(Math.min(Number(e.target.value), maxSell))}
+                <input required type="number" min="1" step="1" max={maxSell} value={sellShares || ''}
+                  onFocus={(e) => e.target.select()}
+                  onChange={e => setSellShares(Math.max(1, Math.min(Number(e.target.value), maxSell)))}
                   className="w-full bg-surface-variant border border-outline-variant rounded-xl px-4 py-3 text-on-surface font-mono focus:border-primary focus:outline-none" />
               </div>
               <div>
                 <label className="block text-xs font-medium text-on-surface-variant mb-1.5">Ask Price per Share ($)</label>
-                <input required type="number" min="0.01" step="0.01" value={sellPrice}
-                  onChange={e => setSellPrice(Number(e.target.value))}
+                <input required type="number" min="1" step="1" value={sellPrice || ''}
+                  onFocus={(e) => e.target.select()}
+                  onChange={e => setSellPrice(Math.max(1, Math.round(Number(e.target.value))))}
                   className="w-full bg-surface-variant border border-outline-variant rounded-xl px-4 py-3 text-on-surface font-mono focus:border-primary focus:outline-none" />
               </div>
             </div>
@@ -477,8 +481,10 @@ export default function Trade() {
                           <input
                             type="number"
                             min={1}
+                            step={1}
                             max={listing.shares}
-                            value={qty}
+                            value={qty || ''}
+                            onFocus={(e) => e.target.select()}
                             onChange={e => setQty(listing.id, parseInt(e.target.value) || 1, listing.shares)}
                             className="flex-1 bg-surface-variant border border-outline-variant rounded-lg px-2 py-1.5 text-center font-mono text-on-surface focus:border-primary focus:outline-none text-sm"
                           />

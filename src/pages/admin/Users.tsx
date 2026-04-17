@@ -381,8 +381,9 @@ export default function AdminUsers() {
             {newUser.role === 'team' && (
               <div>
                 <label className="block text-xs font-medium text-on-surface-variant mb-1.5">Starting Budget ($)</label>
-                <input required type="number" min="0" value={newUser.budget}
-                  onChange={e => setNewUser({ ...newUser, budget: Number(e.target.value) })}
+                <input required type="number" min="0" step="1" value={newUser.budget || ''}
+                  onFocus={(e) => e.target.select()}
+                  onChange={e => setNewUser({ ...newUser, budget: Math.max(0, Math.round(Number(e.target.value))) })}
                   className="w-full bg-surface-variant border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface font-mono focus:border-primary focus:outline-none" />
               </div>
             )}
@@ -486,7 +487,9 @@ export default function AdminUsers() {
                     </td>
                     <td className="p-3">
                       {isEditing && editState.role === 'team' ? (
-                        <input type="number" min="0" value={editState.budget} onChange={e => setEditState(s => ({ ...s, budget: Number(e.target.value) }))} className={clsx(inputCls, 'w-28')} />
+                        <input type="number" min="0" step="1" value={editState.budget || ''}
+                          onFocus={(e) => e.target.select()}
+                          onChange={e => setEditState(s => ({ ...s, budget: Math.max(0, Math.round(Number(e.target.value))) }))} className={clsx(inputCls, 'w-28')} />
                       ) : (
                         <span className={clsx('font-mono font-bold', (isEditing ? editState.role : user.role) === 'team' ? 'text-primary' : 'text-on-surface-variant')}>
                           {user.role === 'team' ? `$${(user.budget || 0).toLocaleString()}` : '—'}

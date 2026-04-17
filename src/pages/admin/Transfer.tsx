@@ -25,11 +25,13 @@ export default function AdminTransfer() {
   const [loadingPortfolio, setLoadingPortfolio] = useState(false);
 
 
-  // Fetch portfolio whenever fromUsername changes
-  const fromUser = allUsers.find(u => u.username === fromUsername);
+  // 'market' is a special synthetic sender — shares come from meme.availableShares
+  const fromIsMarket = fromUsername === '__market__';
+  const fromUser = fromIsMarket ? null : allUsers.find(u => u.username === fromUsername);
   const toUser = allUsers.find(u => u.username === toUsername);
 
   useEffect(() => {
+    if (fromIsMarket) { setFromPortfolio([]); setSelectedMemeId(''); return; }
     if (!fromUser) { setFromPortfolio([]); setSelectedMemeId(''); return; }
     setLoadingPortfolio(true);
     getDocs(query(collection(db, 'portfolios'), where('userId', '==', fromUser.id)))
@@ -41,14 +43,17 @@ export default function AdminTransfer() {
             shares: d.data().shares as number,
             averagePrice: d.data().averagePrice as number,
           }))
-          .filter(p => p.shares > 0)  // filter client-side (avoids composite index requirement)
+          .filter(p => p.shares > 0)
         );
         setSelectedMemeId('');
         setSharesToTransfer(1);
       })
-      .catch(console.error)
+      .catch((err) => {
+        console.error('Portfolio fetch failed:', err);
+        setFromPortfolio([]);
+      })
       .finally(() => setLoadingPortfolio(false));
-  }, [fromUser?.id]);
+  }, [fromUser?.id, fromIsMarket]);
 
   // Update price when meme selected
   useEffect(() => {
@@ -58,11 +63,17 @@ export default function AdminTransfer() {
     }
   }, [selectedMemeId, memes]);
 
-  // Only memes the from-user actually owns
+  // Memes available depend on sender type:
+  // - Market: any meme with availableShares > 0
+  // - User: memes they own in their portfolio
+  const marketMemes = memes.filter(m => m.availableShares > 0);
   const ownedMemeIds = new Set(fromPortfolio.map(p => p.memeId));
-  const availableMemes = memes.filter(m => ownedMemeIds.has(m.id));
-  const selectedPortfolioRow = fromPortfolio.find(p => p.memeId === selectedMemeId);
-  const maxShares = selectedPortfolioRow?.shares ?? 1;
+  const availableMemes = fromIsMarket ? marketMemes : memes.filter(m => ownedMemeIds.has(m.id));
+  const selectedPortfolioRow = fromIsMarket ? null : fromPortfolio.find(p => p.memeId === selectedMemeId);
+  const selectedMarketMeme = fromIsMarket ? memes.find(m => m.id === selectedMemeId) : null;
+  const maxShares = fromIsMarket
+    ? (selectedMarketMeme?.availableShares ?? 0)
+    : (selectedPortfolioRow?.shares ?? 1);
 
   const selectedMeme = memes.find(m => m.id === selectedMemeId);
   const totalValue = sharesToTransfer * pricePerShare;
@@ -72,22 +83,83 @@ export default function AdminTransfer() {
     e.preventDefault();
     setMessage(null);
 
-    if (fromUsername === toUsername) { setMessage({ type: 'error', text: 'Cannot transfer to the same user.' }); return; }
-    if (!fromUser || !toUser) { setMessage({ type: 'error', text: 'One or both users not found.' }); return; }
-    if (!selectedPortfolioRow) { setMessage({ type: 'error', text: 'This meme is not in the sender\'s portfolio.' }); return; }
-    if (sharesToTransfer > selectedPortfolioRow.shares) {
-      setMessage({ type: 'error', text: `${fromUsername} only has ${selectedPortfolioRow.shares} shares. You can't transfer more.` });
-      return;
+    if (fromIsMarket) {
+      // Validate market source
+      if (!selectedMarketMeme) { setMessage({ type: 'error', text: 'Select a meme from the market.' }); return; }
+      if (sharesToTransfer > selectedMarketMeme.availableShares) {
+        setMessage({ type: 'error', text: `Market only has ${selectedMarketMeme.availableShares} available shares.` });
+        return;
+      }
+    } else {
+      if (fromUsername === toUsername) { setMessage({ type: 'error', text: 'Cannot transfer to the same user.' }); return; }
+      if (!fromUser || !toUser) { setMessage({ type: 'error', text: 'One or both users not found.' }); return; }
+      if (!selectedPortfolioRow) { setMessage({ type: 'error', text: 'This meme is not in the sender\'s portfolio.' }); return; }
+      if (sharesToTransfer > selectedPortfolioRow.shares) {
+        setMessage({ type: 'error', text: `${fromUsername} only has ${selectedPortfolioRow.shares} shares.` });
+        return;
+      }
     }
 
     setIsTransferring(true);
     try {
-      /* ────────────────────────────────────────────
-       * Query portfolio docs OUTSIDE the transaction
-       * to avoid "Quota exceeded" from Firestore
-       * retrying getDocs() calls repeatedly
-       * ──────────────────────────────────────────── */
-      const fromPortRef = doc(db, 'portfolios', selectedPortfolioRow.docId);
+      // ── MARKET → TEAM path ──────────────────────────────────────────────────
+      if (fromIsMarket) {
+        if (!toUser) { setMessage({ type: 'error', text: 'Receiver not found.' }); return; }
+        const memeRef = doc(db, 'memes', selectedMemeId);
+        const toPortSnap = await getDocs(
+          query(collection(db, 'portfolios'), where('userId', '==', toUser.id), where('memeId', '==', selectedMemeId))
+        );
+        const existingToPortDoc = toPortSnap.empty ? null : toPortSnap.docs[0];
+        const toPortRef = existingToPortDoc ? doc(db, 'portfolios', existingToPortDoc.id) : null;
+        const toUserRef = doc(db, 'users', toUser.id);
+
+        await runTransaction(db, async (transaction) => {
+          const memeSnap = await transaction.get(memeRef);
+          const avail: number = memeSnap.data()?.availableShares || 0;
+          if (avail < sharesToTransfer)
+            throw new Error(`Market only has ${avail} shares left now.`);
+
+          // Deduct from market
+          transaction.update(memeRef, { availableShares: avail - sharesToTransfer });
+
+          // Credit receiver's portfolio
+          if (toPortRef) {
+            const existing = await transaction.get(toPortRef);
+            const existShares: number = existing.data()?.shares || 0;
+            const existAvg: number = existing.data()?.averagePrice || 0;
+            const newShares = existShares + sharesToTransfer;
+            const newAvg = ((existShares * existAvg) + (sharesToTransfer * pricePerShare)) / newShares;
+            transaction.update(toPortRef, { shares: newShares, averagePrice: newAvg });
+          } else {
+            const newPortRef = doc(collection(db, 'portfolios'));
+            transaction.set(newPortRef, {
+              userId: toUser.id, memeId: selectedMemeId,
+              shares: sharesToTransfer, averagePrice: pricePerShare,
+            });
+          }
+
+          // Deduct budget if price > 0 (team pays for the shares)
+          if (pricePerShare > 0) {
+            const toUserSnap = await transaction.get(toUserRef);
+            const budget: number = toUserSnap.data()?.budget || 0;
+            if (budget < totalValue)
+              throw new Error(`${toUser.name} doesn't have enough budget ($${Math.round(budget).toLocaleString()}).`);
+            transaction.update(toUserRef, { budget: budget - totalValue });
+          }
+        });
+
+        setMessage({
+          type: 'success',
+          text: `✅ Pushed ${sharesToTransfer} shares of "${selectedMeme?.name}" from Market → ${toUser.name}${pricePerShare > 0 ? ` for $${totalValue.toLocaleString()}` : ' (free)'}`,
+        });
+        setSelectedMemeId('');
+        setSharesToTransfer(1);
+        setPricePerShare(0);
+        return;
+      }
+
+      // ── USER → USER path ────────────────────────────────────────────────────
+      const fromPortRef = doc(db, 'portfolios', selectedPortfolioRow!.docId);
 
       // Receiver's portfolio doc (if exists)
       let toPortRef: ReturnType<typeof doc> | null = null;
@@ -167,7 +239,7 @@ export default function AdminTransfer() {
         if (pricePerShare > 0 && toUserRef) {
           const toUserData = await transaction.get(toUserRef);
           const toBudget: number = toUserData.data()?.budget || 0;
-          if (toBudget < totalValue) throw new Error(`${toUsername} doesn't have enough budget ($${toBudget.toFixed(2)}).`);
+          if (toBudget < totalValue) throw new Error(`${toUsername} doesn't have enough budget ($${Math.round(toBudget).toLocaleString()}).`);
           transaction.update(fromUserRef, { budget: fromBudget + totalValue });
           transaction.update(toUserRef, { budget: toBudget - totalValue });
         }
@@ -269,6 +341,7 @@ export default function AdminTransfer() {
             <select required value={fromUsername} onChange={e => { setFromUsername(e.target.value); setMessage(null); }}
               className="w-full bg-surface-variant border border-outline-variant rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none">
               <option value="">Select sender…</option>
+              <option value="__market__">🏪 Market (available shares)</option>
               {allUsers.map(u => (
                 <option key={u.id} value={u.username}>
                   {u.name || u.username} (@{u.username}) {u.role === 'team' ? `— $${(u.budget || 0).toLocaleString()}` : '[Admin]'}
@@ -302,12 +375,19 @@ export default function AdminTransfer() {
           <select required value={selectedMemeId} onChange={e => { setSelectedMemeId(e.target.value); setSharesToTransfer(1); setMessage(null); }}
             disabled={!fromUsername || loadingPortfolio}
             className="w-full bg-surface-variant border border-outline-variant rounded-xl px-4 py-3 text-on-surface focus:border-primary focus:outline-none disabled:opacity-50">
-            <option value="">{fromUsername ? (availableMemes.length === 0 ? 'No memes in portfolio' : 'Select meme…') : 'Select sender first…'}</option>
+            <option value="">{fromUsername
+              ? (availableMemes.length === 0
+                  ? (fromIsMarket ? 'No memes available in market' : 'No memes in portfolio — stop Round 1 first')
+                  : 'Select meme…')
+              : 'Select sender first…'}</option>
             {availableMemes.map(m => {
-              const owned = fromPortfolio.find(p => p.memeId === m.id)?.shares || 0;
+              const owned = fromIsMarket
+                ? m.availableShares
+                : (fromPortfolio.find(p => p.memeId === m.id)?.shares || 0);
+              const label = fromIsMarket ? 'available in market' : 'shares owned';
               return (
                 <option key={m.id} value={m.id}>
-                  {m.name} — {owned} shares owned — Market price: ${m.currentPrice.toFixed(2)}
+                  {m.name} — {owned} {label} — Price: ${Math.round(m.currentPrice)}
                 </option>
               );
             })}
@@ -320,10 +400,11 @@ export default function AdminTransfer() {
             <label className="block text-xs font-medium text-on-surface-variant mb-1.5">
               Number of Shares {maxShares > 0 && selectedMemeId && <span className="text-primary font-normal">(max: {maxShares})</span>}
             </label>
-            <input required type="number" min="1" max={maxShares}
-              value={sharesToTransfer}
+            <input required type="number" min="1" step="1" max={maxShares}
+              value={sharesToTransfer || ''}
+              onFocus={(e) => e.target.select()}
               onChange={e => {
-                const v = Math.min(Number(e.target.value), maxShares);
+                const v = Math.min(Math.max(Math.round(Number(e.target.value)), 1), maxShares);
                 setSharesToTransfer(v);
               }}
               className="w-full bg-surface-variant border border-outline-variant rounded-xl px-4 py-3 text-on-surface font-mono focus:border-primary focus:outline-none" />
@@ -339,8 +420,9 @@ export default function AdminTransfer() {
             </label>
             <div className="relative">
               <DollarSign size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
-              <input type="number" min="0" step="0.01" value={pricePerShare}
-                onChange={e => setPricePerShare(Number(e.target.value))}
+              <input type="number" min="0" step="1" value={pricePerShare || ''}
+                onFocus={(e) => e.target.select()}
+                onChange={e => setPricePerShare(Math.max(0, Math.round(Number(e.target.value))))}
                 className="w-full bg-surface-variant border border-outline-variant rounded-xl pl-8 pr-4 py-3 text-on-surface font-mono focus:border-primary focus:outline-none" />
             </div>
             {pricePerShare > 0 && (
