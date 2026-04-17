@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { useStore, AppUser } from '../../store/useStore';
+import { useStore } from '../../store/useStore';
 import {
   collection, query, where, getDocs, doc,
-  runTransaction, updateDoc, onSnapshot,
+  runTransaction,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { ArrowRight, Repeat2, CheckCircle2, AlertCircle, DollarSign } from 'lucide-react';
@@ -11,10 +11,7 @@ import clsx from 'clsx';
 interface PortfolioRow { docId: string; memeId: string; shares: number; averagePrice: number; }
 
 export default function AdminTransfer() {
-  const { memes } = useStore();
-
-  // All users (admin can be "from" — transfers back to admin = back to market)
-  const [allUsers, setAllUsers] = useState<AppUser[]>([]);
+  const { memes, allUsers } = useStore();
   const [fromUsername, setFromUsername] = useState('');
   const [toUsername, setToUsername] = useState('');
   const [selectedMemeId, setSelectedMemeId] = useState('');
@@ -27,12 +24,6 @@ export default function AdminTransfer() {
   const [fromPortfolio, setFromPortfolio] = useState<PortfolioRow[]>([]);
   const [loadingPortfolio, setLoadingPortfolio] = useState(false);
 
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'users'), (snap) => {
-      setAllUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as AppUser)));
-    }, console.error);
-    return () => unsub();
-  }, []);
 
   // Fetch portfolio whenever fromUsername changes
   const fromUser = allUsers.find(u => u.username === fromUsername);

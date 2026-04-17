@@ -38,18 +38,35 @@ export default function Trade() {
   const selectedPortfolioRow = myMemes.find(p => p.memeId === sellMemeId);
   const maxSell = selectedPortfolioRow?.shares ?? 0;
 
-  // My active sell listings
-  const myListings = tradeListings.filter(l => l.sellerId === appUser?.id && l.status === 'active');
-  // Listings I can buy (not mine, active)
-  const marketListings = tradeListings.filter(l => l.sellerId !== appUser?.id && l.status === 'active');
-  // Completed trades for eligibility
-  const soldByMe = tradeListings.filter(l => l.sellerId === appUser?.id && l.status === 'sold');
-  const boughtByMe = tradeListings.filter(l => l.buyerId === appUser?.id && l.status === 'sold');
+  // Fix #9: Eligibility uses sold listings fetched on-demand because the store
+  // listener now only keeps `status == 'active'` listings to save reads.
+  const [soldListings, setSoldListings] = React.useState<typeof tradeListings>([]);
+
+  React.useEffect(() => {
+    if (!appUser || !isTradeActive) return;
+    getDocs(
+      query(
+        collection(db, 'tradeListings'),
+        where('status', '==', 'sold'),
+        where('sellerId', '==', appUser.id)
+      )
+    ).then((snap) =>
+      setSoldListings(snap.docs.map((d) => ({ id: d.id, ...d.data() } as typeof tradeListings[0])))
+    ).catch(console.error);
+  // refetch whenever a trade completes — buyMsg is the proxy trigger
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appUser?.id, isTradeActive, buyMsg]);
+
+  const soldByMe = soldListings.filter((l) => l.sellerId === appUser?.id);
+  const boughtByMe = soldListings.filter((l) => l.buyerId === appUser?.id);
   const sharesSold = soldByMe.reduce((s, l) => s + l.shares, 0);
   const sharesBought = boughtByMe.reduce((s, l) => s + l.shares, 0);
   const isEligible = sharesSold >= MIN_SHARES && sharesBought >= MIN_SHARES;
 
-  // Helper: get qty for a listing (default 1)
+  // Store now only keeps status='active' listings, so no status filter needed here
+  const myListings = tradeListings.filter((l) => l.sellerId === appUser?.id);
+  const marketListings = tradeListings.filter((l) => l.sellerId !== appUser?.id);
+
   const getQty = (listingId: string, max: number) =>
     Math.min(Math.max(buyQty[listingId] ?? 1, 1), max);
 
@@ -94,27 +111,58 @@ export default function Trade() {
     }
   };
 
-  // Cancel a sell listing (return shares to portfolio)
+  // Fix #4: Cancel listing is now inside a runTransaction so it's atomic.
+  // The transaction verifies the listing is still 'active' before proceeding,
+  // preventing a race where a buyer completes just as the seller cancels
+  // (which would double-credit shares).
   const handleCancelListing = async (listing: typeof tradeListings[0]) => {
     if (!appUser) return;
     try {
+      const listingRef = doc(db, 'tradeListings', listing.id);
+
+      // Look up buyer's current portfolio doc before the transaction
       const portSnap = await getDocs(
-        query(collection(db, 'portfolios'), where('userId', '==', appUser.id), where('memeId', '==', listing.memeId))
+        query(
+          collection(db, 'portfolios'),
+          where('userId', '==', appUser.id),
+          where('memeId', '==', listing.memeId)
+        )
       );
-      if (portSnap.empty) {
-        await addDoc(collection(db, 'portfolios'), {
-          userId: appUser.id,
-          memeId: listing.memeId,
-          shares: listing.shares,
-          averagePrice: listing.pricePerShare,
-        });
-      } else {
-        const existing = portSnap.docs[0];
-        await updateDoc(doc(db, 'portfolios', existing.id), { shares: existing.data().shares + listing.shares });
-      }
-      await deleteDoc(doc(db, 'tradeListings', listing.id));
-    } catch (err: any) {
-      setSellMsg({ type: 'error', text: err.message || 'Could not cancel.' });
+      const existingPortDoc = portSnap.empty ? null : portSnap.docs[0];
+      const existingPortRef = existingPortDoc
+        ? doc(db, 'portfolios', existingPortDoc.id)
+        : null;
+
+      await runTransaction(db, async (transaction) => {
+        // Verify listing still exists and is active
+        const listingSnap = await transaction.get(listingRef);
+        if (!listingSnap.exists() || listingSnap.data().status !== 'active') {
+          throw new Error('This listing is no longer active — it may have just been sold.');
+        }
+        const shares: number = listingSnap.data().shares;
+
+        // Return shares to seller's portfolio
+        if (existingPortRef) {
+          const portData = await transaction.get(existingPortRef);
+          transaction.update(existingPortRef, {
+            shares: (portData.data()?.shares || 0) + shares,
+          });
+        } else {
+          const newPortRef = doc(collection(db, 'portfolios'));
+          transaction.set(newPortRef, {
+            userId: appUser.id,
+            memeId: listing.memeId,
+            shares,
+            averagePrice: listing.pricePerShare,
+          });
+        }
+
+        // Delete the listing atomically
+        transaction.delete(listingRef);
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Could not cancel.';
+      setSellMsg({ type: 'error', text: message });
     }
   };
 

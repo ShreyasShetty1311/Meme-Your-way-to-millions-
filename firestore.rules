@@ -1,27 +1,74 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
-    function isAuthenticated() {
-      return true; // Relaxed for custom demo auth
+
+    // ── Helper: basic authenticated session (anonymous sign-in is enough) ──
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ── Helper: resolve role from the users collection ──
+    function callerRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
     }
 
     function isAdmin() {
-      return true; // Relaxed for custom demo auth
+      return isSignedIn() && callerRole() == 'admin';
     }
 
-    function isOwner(userId) {
-      return true; // Relaxed for custom demo auth
+    // ── users ──────────────────────────────────────────────
+    // Only admin can list/update/delete all users.
+    // Each user can read their own doc (for session restore).
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // ===============================================================
-    // Rules
-    // ===============================================================
+    // ── gameState ──────────────────────────────────────────
+    match /gameState/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
 
-    match /{document=**} {
-      allow read, write: if true; // TEMPORARY DEV BYPASS FOR CUSTOM AUTH DEMO
+    // ── memes ──────────────────────────────────────────────
+    match /memes/{memeId} {
+      allow read: if isSignedIn();
+      // Admin can create/delete; transactions (buy) can update via runTransaction
+      allow write: if isSignedIn();
+    }
+
+    // ── scenarios ──────────────────────────────────────────
+    match /scenarios/{scenarioId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── portfolios ─────────────────────────────────────────
+    match /portfolios/{portfolioId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // ── submissions ────────────────────────────────────────
+    match /submissions/{submissionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── votes ──────────────────────────────────────────────
+    match /votes/{voteId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── tradeListings ──────────────────────────────────────
+    match /tradeListings/{listingId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
   }
 }

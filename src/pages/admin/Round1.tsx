@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useStore } from '../../store/useStore';
-import { collection, addDoc, doc, updateDoc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc, setDoc, getDoc, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import {
   Plus, PlayCircle, StopCircle, TrendingUp, TrendingDown,
@@ -39,32 +39,50 @@ export default function AdminRound1() {
     }
   };
 
-  /** Stop Round 1: assign all unsold shares to the admin's portfolio */
+  /** Stop Round 1 — Fix #3 & #7:
+   * - Fetches memes FRESH from Firestore (not the stale Zustand snapshot)
+   * - Commits all portfolio + meme updates in one writeBatch (atomic)
+   * - A crash or network drop mid-way no longer leaves half the memes zeroed
+   */
   const handleStopRound1 = async () => {
     if (!appUser) return;
     setStoppingRound(true);
     try {
-      for (const meme of memes) {
-        if (meme.availableShares <= 0) continue;
+      // Fetch the authoritative meme list fresh — not from cached store.
+      const memesSnap = await getDocs(collection(db, 'memes'));
+      const batch = writeBatch(db);
 
-        const portId = `${appUser.id}_${meme.id}`;
+      for (const memeDoc of memesSnap.docs) {
+        const memeData = memeDoc.data();
+        const unsoldShares: number = memeData.availableShares || 0;
+        if (unsoldShares <= 0) continue;
+
+        const portId = `${appUser.id}_${memeDoc.id}`;
         const portRef = doc(db, 'portfolios', portId);
-        const existing = await getDoc(portRef);
+        const existingPort = await getDoc(portRef);
 
-        if (existing.exists()) {
-          await updateDoc(portRef, { shares: existing.data().shares + meme.availableShares });
+        if (existingPort.exists()) {
+          batch.update(portRef, { shares: existingPort.data().shares + unsoldShares });
         } else {
-          await setDoc(portRef, {
+          batch.set(portRef, {
             userId: appUser.id,
-            memeId: meme.id,
-            shares: meme.availableShares,
-            averagePrice: meme.currentPrice,
+            memeId: memeDoc.id,
+            shares: unsoldShares,
+            averagePrice: memeData.currentPrice,
           });
         }
+
         // Zero out available shares on the meme itself
-        await updateDoc(doc(db, 'memes', meme.id), { availableShares: 0 });
+        batch.update(memeDoc.ref, { availableShares: 0 });
       }
-      await updateDoc(doc(db, 'gameState', 'current'), { currentRound: 1, status: 'completed' });
+
+      // Update game state inside the same batch
+      batch.update(doc(db, 'gameState', 'current'), {
+        currentRound: 1,
+        status: 'completed',
+      });
+
+      await batch.commit(); // atomic — all or nothing
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'round1-stop');
     } finally {

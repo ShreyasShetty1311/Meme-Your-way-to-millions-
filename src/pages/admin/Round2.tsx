@@ -1,26 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import { useStore, AppUser } from '../../store/useStore';
-import { collection, addDoc, doc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import React, { useState } from 'react';
+import { useStore } from '../../store/useStore';
+import { collection, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { Plus, PlayCircle, StopCircle, CheckCircle, Trash2, Radio, X, FileText, Users, ThumbsUp, Clock } from 'lucide-react';
 import clsx from 'clsx';
 
 export default function AdminRound2() {
-  const { scenarios, gameState, submissions, votes, memes } = useStore();
+  const { scenarios, gameState, submissions, votes, memes, allUsers } = useStore();
   const [isAdding, setIsAdding] = useState(false);
   const [loading, setLoading] = useState(false);
   const [newScenario, setNewScenario] = useState({ title: '', description: '' });
-  const [teamUsers, setTeamUsers] = useState<AppUser[]>([]);
 
-  // Fetch all team users for submission tracking
-  useEffect(() => {
-    const unsub = onSnapshot(
-      collection(db, 'users'),
-      (snap) => setTeamUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as AppUser)).filter(u => u.role === 'team')),
-      console.error
-    );
-    return () => unsub();
-  }, []);
+  // Fix #6: Use allUsers from the store (single shared listener) instead of a
+  // per-component onSnapshot on the users collection.
+  const teamUsers = allUsers.filter((u) => u.role === 'team');
 
   const handleRoundChange = async (round: number, status: 'setup' | 'active' | 'completed') => {
     try {

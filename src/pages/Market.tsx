@@ -8,7 +8,13 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 export default function Market() {
   const { memes, appUser, gameState, portfolio } = useStore();
   const [buyingMeme, setBuyingMeme] = useState<string | null>(null);
-  const [buyAmount, setBuyAmount] = useState<number>(1);
+  // Fix #5: Each meme card has its own independent quantity — no more "buy 5
+  // of the wrong meme" glitch from shared state.
+  const [buyAmounts, setBuyAmounts] = useState<Record<string, number>>({});
+
+  const getBuyAmount = (memeId: string) => Math.max(buyAmounts[memeId] ?? 1, 1);
+  const setBuyAmount = (memeId: string, val: number) =>
+    setBuyAmounts((prev) => ({ ...prev, [memeId]: Math.max(val, 1) }));
 
   if (gameState?.currentRound !== 1 || gameState?.status !== 'active') {
     return (
@@ -25,12 +31,14 @@ export default function Market() {
   }
 
   const handleBuy = async (memeId: string) => {
-    if (!appUser || buyAmount <= 0) return;
-    
+    const qty = getBuyAmount(memeId);
+    if (!appUser || qty <= 0) return;
+
     try {
       setBuyingMeme(memeId);
       const memeRef = doc(db, 'memes', memeId);
       const userRef = doc(db, 'users', appUser.id);
+      // Fix #12: Deterministic portfolio ID — consistent with Transfer.tsx
       const portfolioRef = doc(db, 'portfolios', `${appUser.id}_${memeId}`);
 
       await runTransaction(db, async (transaction) => {
@@ -39,51 +47,53 @@ export default function Market() {
         const portfolioDoc = await transaction.get(portfolioRef);
 
         if (!memeDoc.exists() || !userDoc.exists()) {
-          throw new Error("Document does not exist!");
+          throw new Error('Document does not exist!');
         }
 
         const memeData = memeDoc.data();
         const userData = userDoc.data();
-        const totalCost = memeData.currentPrice * buyAmount;
+        const totalCost = memeData.currentPrice * qty;
 
-        if (memeData.availableShares < buyAmount) {
-          throw new Error("Not enough shares available!");
+        if (memeData.availableShares < qty) {
+          throw new Error('Not enough shares available!');
         }
         if ((userData.budget || 0) < totalCost) {
-          throw new Error("Insufficient funds!");
+          throw new Error('Insufficient funds!');
         }
 
         // Update Meme
         transaction.update(memeRef, {
-          availableShares: memeData.availableShares - buyAmount,
-          // Simple price increase logic based on demand
-          currentPrice: memeData.currentPrice + (buyAmount * 0.5)
+          availableShares: memeData.availableShares - qty,
+          currentPrice: memeData.currentPrice + qty * 0.5,
         });
 
         // Update User Budget
         transaction.update(userRef, {
-          budget: (userData.budget || 0) - totalCost
+          budget: (userData.budget || 0) - totalCost,
         });
 
-        // Update Portfolio
+        // Update Portfolio (deterministic ID — set with merge avoids duplicate docs)
         if (portfolioDoc.exists()) {
           const portData = portfolioDoc.data();
-          const newShares = portData.shares + buyAmount;
-          const newAvgPrice = ((portData.shares * portData.averagePrice) + totalCost) / newShares;
+          const newShares = portData.shares + qty;
+          const newAvgPrice =
+            (portData.shares * portData.averagePrice + totalCost) / newShares;
           transaction.update(portfolioRef, {
             shares: newShares,
-            averagePrice: newAvgPrice
+            averagePrice: newAvgPrice,
           });
         } else {
           transaction.set(portfolioRef, {
             userId: appUser.id,
             memeId: memeId,
-            shares: buyAmount,
-            averagePrice: memeData.currentPrice
+            shares: qty,
+            averagePrice: memeData.currentPrice,
           });
         }
       });
-      setBuyAmount(1);
+
+      // Reset only this meme's qty
+      setBuyAmount(memeId, 1);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'market_transaction');
     } finally {
@@ -113,6 +123,7 @@ export default function Market() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
         {memes.map((meme) => {
+          const buyAmount = getBuyAmount(meme.id);
           const isBuying = buyingMeme === meme.id;
           const priceChange = meme.currentPrice - meme.initialPrice;
           const isUp = priceChange >= 0;
@@ -157,12 +168,12 @@ export default function Market() {
                 )}
 
                 <div className="mt-auto pt-4 border-t border-outline-variant flex gap-2">
-                  <input 
-                    type="number" 
-                    min="1" 
+                  <input
+                    type="number"
+                    min="1"
                     max={meme.availableShares}
                     value={buyAmount}
-                    onChange={(e) => setBuyAmount(parseInt(e.target.value) || 1)}
+                    onChange={(e) => setBuyAmount(meme.id, parseInt(e.target.value) || 1)}
                     className="w-20 bg-surface-variant border border-outline-variant rounded-xl px-3 py-2 text-center font-mono text-on-surface focus:outline-none focus:border-primary"
                   />
                   <button 

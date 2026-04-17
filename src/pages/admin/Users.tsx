@@ -290,7 +290,7 @@ export default function AdminUsers() {
               <p>🔄 Reset all meme prices to initial values</p>
               <p>💰 Reset all team budgets to ${STARTING_BUDGET.toLocaleString()}</p>
               <p>⚙️ Set game state back to Setup (Round 0)</p>
-              <p className="text-on-surface font-medium mt-2">✅ Users & meme catalog are kept.</p>
+              <p className="text-on-surface font-medium mt-2">✅ Users, memes & scenarios are kept.</p>
             </div>
 
             {resetStatus && (
